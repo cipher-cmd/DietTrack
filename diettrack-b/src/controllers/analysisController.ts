@@ -1,7 +1,6 @@
 // src/controllers/analysisController.ts
 // Production-ready analysis controller:
 // - Validates input (photo OR prompt)
-// - Optional cache/dedupe (by image_hash; prompt heuristic)
 // - Runs model(s) + IFCT enrichment
 // - DB-grounding pass (ingredients/recipes + personal aliases/servings)
 // - Summarizes macros
@@ -39,10 +38,7 @@ type AnalysisResponseWithSummary = AnalysisResponse & {
 };
 
 const r1 = (n: unknown) => Math.round((Number(n) || 0) * 10) / 10;
-const clamp0 = (n: unknown) => {
-  const x = Number(n);
-  return Number.isFinite(x) && x > 0 ? x : 0;
-};
+const clamp0 = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0);
 
 const zNut = () => ({
   calories: 0,
@@ -57,24 +53,17 @@ const zNut = () => ({
 
 // ── IFCT helpers ──────────────────────────────────────────────────────────────
 function toIFCTDetectFormat(items: ReadonlyArray<any>) {
-  return items
-    .map((it, idx) => [
-      Number(it.itemId ?? idx + 1),
-      String(it.name || '').toLowerCase(),
+  return items.map((it, idx) => ({
+    itemId: Number(it.itemId ?? idx + 1),
+    name: String(it.name || '').toLowerCase(),
+    portion_g:
       it.portion_g ??
-        it.portionSize?.estimatedGrams ??
-        it.portion_size?.estimated_grams ??
-        100,
-      typeof it.confidence === 'number' ? it.confidence : 0.6,
-      it.source || 'ai',
-    ])
-    .map(([itemId, name, portion_g, confidence, source]) => ({
-      itemId,
-      name,
-      portion_g,
-      confidence,
-      source,
-    }));
+      it.portionSize?.estimatedGrams ??
+      it.portion_size?.estimated_grams ??
+      100,
+    confidence: typeof it.confidence === 'number' ? it.confidence : 0.6,
+    source: it.source || 'ai',
+  }));
 }
 
 function mapEnrichedToDetected(
@@ -90,16 +79,18 @@ function mapEnrichedToDetected(
     const base = byId.get(id) || raw[idx];
 
     const grams =
-      clamp0(e.portion_g) ||
-      clamp0(e.portion_size_g) ||
-      clamp0(base?.portionSize?.estimatedGrams) ||
+      e.portion_g ??
+      e.portion_size_g ??
+      base?.portionSize?.estimatedGrams ??
       100;
 
     const servingSizeCategory: ServingSize =
       grams < 80 ? 'small' : grams > 200 ? 'large' : 'medium';
 
     const n_cal = Math.round(
-      clamp0(e.energy_kcal_per_serving ?? base?.nutrition?.calories ?? 0)
+      clamp0(
+        Number(e.energy_kcal_per_serving ?? base?.nutrition?.calories ?? 0)
+      )
     );
     const n_pro = r1(e.protein_g_per_serving ?? base?.nutrition?.protein ?? 0);
     const n_car = r1(e.carbs_g_per_serving ?? base?.nutrition?.carbs ?? 0);
@@ -107,21 +98,25 @@ function mapEnrichedToDetected(
     const n_fib = r1(e.fiber_g_per_serving ?? base?.nutrition?.fiber ?? 0);
     const n_sug = r1(e.sugar_g_per_serving ?? base?.nutrition?.sugar ?? 0);
     const n_sod = Math.round(
-      clamp0(e.sodium_mg_per_serving ?? base?.nutrition?.sodium ?? 0)
+      clamp0(Number(e.sodium_mg_per_serving ?? base?.nutrition?.sodium ?? 0))
     );
     const n_cho = Math.round(
-      clamp0(e.cholesterol_mg_per_serving ?? base?.nutrition?.cholesterol ?? 0)
+      clamp0(
+        Number(
+          e.cholesterol_mg_per_serving ?? base?.nutrition?.cholesterol ?? 0
+        )
+      )
     );
 
     const per100 =
       grams > 0
         ? {
             calories: Math.round((n_cal * 100) / grams),
-            protein: r1(((n_pro as number) * 100) / grams),
-            carbs: r1(((n_car as number) * 100) / grams),
-            fat: r1(((n_fat as number) * 100) / grams),
-            fiber: r1(((n_fib as number) * 100) / grams),
-            sugar: r1(((n_sug as number) * 100) / grams),
+            protein: r1((n_pro * 100) / grams),
+            carbs: r1((n_car * 100) / grams),
+            fat: r1((n_fat * 100) / grams),
+            fiber: r1((n_fib * 100) / grams),
+            sugar: r1((n_sug * 100) / grams),
             sodium: Math.round((n_sod * 100) / grams),
             cholesterol: Math.round((n_cho * 100) / grams),
           }
@@ -175,8 +170,9 @@ async function parseTextToItems(text: string): Promise<DetectedFoodItem[]> {
   for (const p of parts) {
     const ifct = await getIFCTFoodByName(p);
     const portionG = clamp0((ifct as any)?.serving_size_g) || 150;
-    const serving: ServingSize =
-      portionG < 80 ? 'small' : portionG > 200 ? 'large' : 'medium';
+    let serving: ServingSize = 'medium';
+    if (portionG < 80) serving = 'small';
+    else if (portionG > 200) serving = 'large';
 
     const item: DetectedFoodItem = {
       itemId: out.length + 1,
@@ -251,11 +247,14 @@ export const analyzeFood = async (
     };
     const userId: string | undefined = rawBody.userId;
 
+    // 🔧 Normalize image to guaranteed string and use it everywhere
+    const image: string =
+      typeof payload.image === 'string' ? payload.image : '';
     const promptText: string = String(
       (payload.userContext as any)?.prompt ?? ''
-    );
-    const hasImage = !!payload.image;
-    const hasPrompt = !!promptText.trim();
+    ).trim();
+    const hasImage = image.length > 0;
+    const hasPrompt = promptText.length > 0;
 
     if (!hasImage && !hasPrompt) {
       return res.status(400).json({
@@ -269,99 +268,14 @@ export const analyzeFood = async (
 
     let imageHash: string | null = null;
     if (hasImage) {
-      if (!validateBase64Image(payload.image)) {
+      if (!validateBase64Image(image)) {
         return res.status(400).json({
           success: false,
           error: 'Invalid image data URL',
           code: 'BAD_IMAGE',
         });
       }
-      imageHash = hashBase64Image(payload.image);
-    }
-
-    // ---- quick dedupe: reuse a recent identical analysis ----
-    try {
-      const supabase = getSupabase();
-      const ttlSec = Number(process.env.ANALYSIS_CACHE_TTL || '0'); // e.g. 3600
-      const sinceIso =
-        ttlSec > 0 ? new Date(Date.now() - ttlSec * 1000).toISOString() : null;
-
-      if (sinceIso) {
-        if (imageHash) {
-          const { data: cached } = await supabase
-            .from('food_analyses')
-            .select(
-              'id, detected_items, confidence_score, processing_time_ms, nutrition_summary'
-            )
-            .eq('user_id', userId || null)
-            .eq('image_hash', imageHash)
-            .gte('created_at', sinceIso)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (cached) {
-            logger.info(`[ANALYSIS CACHE] hit by image_hash id=${cached.id}`);
-            return res.json({
-              success: true,
-              data: {
-                analysisId: cached.id,
-                detectedItems: cached.detected_items,
-                overallConfidence: cached.confidence_score ?? 0.6,
-                processing_time: `${cached.processing_time_ms ?? 0}ms`,
-                nutritionSummary:
-                  (cached.nutrition_summary as NutritionSummary) ?? {
-                    total_calories: 0,
-                    total_protein: 0,
-                    total_carbs: 0,
-                    total_fat: 0,
-                  },
-              },
-            });
-          }
-        } else if (hasPrompt && userId) {
-          // heuristically reuse last prompt-only analysis for this user
-          const { data: recent } = await supabase
-            .from('food_analyses')
-            .select(
-              'id, detected_items, confidence_score, processing_time_ms, nutrition_summary'
-            )
-            .eq('user_id', userId)
-            .gte('created_at', sinceIso)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          const firstName =
-            recent?.detected_items?.[0]?.name?.toString()?.toLowerCase?.() ??
-            '';
-          if (
-            recent &&
-            firstName &&
-            promptText.toLowerCase().includes(firstName)
-          ) {
-            logger.info(`[ANALYSIS CACHE] prompt heuristic id=${recent.id}`);
-            return res.json({
-              success: true,
-              data: {
-                analysisId: recent.id,
-                detectedItems: recent.detected_items,
-                overallConfidence: recent.confidence_score ?? 0.6,
-                processing_time: `${recent.processing_time_ms ?? 0}ms`,
-                nutritionSummary:
-                  (recent.nutrition_summary as NutritionSummary) ?? {
-                    total_calories: 0,
-                    total_protein: 0,
-                    total_carbs: 0,
-                    total_fat: 0,
-                  },
-              },
-            });
-          }
-        }
-      }
-    } catch (e) {
-      logger.warn('[ANALYSIS CACHE] lookup failed (non-fatal)', e);
+      imageHash = hashBase64Image(image);
     }
 
     // Optional model hints from DB; non-fatal
@@ -375,26 +289,21 @@ export const analyzeFood = async (
     // 1) AI + combine (or text parse), with fallback when image finds nothing
     let detectedRaw: DetectedFoodItem[] = [];
     if (hasImage) {
-      let combinedItems: DetectedFoodItem[] = [];
-      try {
-        const analyses = await aiAnalysisService.multiModelAnalysis({
-          image: payload.image,
-          userContext: { ...(payload.userContext as any), dbHints },
-          referenceObject: payload.referenceObject as any,
-          userId,
-        });
-        const combined = aiAnalysisService.combineAnalysisResults(analyses);
-        combinedItems = combined.detectedItems || [];
-      } catch (e) {
-        logger.error('[AI] multiModelAnalysis failed', e);
-      }
+      const analyses = await aiAnalysisService.multiModelAnalysis({
+        image,
+        userContext: { ...(payload.userContext as any), dbHints },
+        referenceObject: payload.referenceObject as any,
+        userId,
+      });
+      const combined = aiAnalysisService.combineAnalysisResults(analyses);
+      detectedRaw = [...combined.detectedItems];
 
-      detectedRaw =
-        combinedItems.length > 0
-          ? combinedItems
-          : hasPrompt
-            ? await parseTextToItems(promptText)
-            : [];
+      if (detectedRaw.length === 0 && hasPrompt) {
+        logger.info(
+          `[ANALYSIS] empty image detections; fallback to prompt parse`
+        );
+        detectedRaw = await parseTextToItems(promptText);
+      }
     } else {
       detectedRaw = await parseTextToItems(promptText);
     }
@@ -405,7 +314,7 @@ export const analyzeFood = async (
     try {
       enriched = await enrichWithIFCTData(normalized);
     } catch (e) {
-      logger.error('[IFCT] enrichment failed', e);
+      logger.error(`[IFCT] enrichment failed id=${reqId}`, e);
       enriched = normalized;
     }
 
@@ -427,23 +336,19 @@ export const analyzeFood = async (
     }
 
     // 4) Summary
-    let total_calories = 0;
-    let total_protein = 0;
-    let total_carbs = 0;
-    let total_fat = 0;
-    for (const it of displayItems) {
-      total_calories += Math.round(Number(it.nutrition.calories || 0));
-      total_protein = r1(
-        total_protein + Number(it.nutrition.protein || 0)
-      ) as number;
-      total_carbs = r1(total_carbs + Number(it.nutrition.carbs || 0)) as number;
-      total_fat = r1(total_fat + Number(it.nutrition.fat || 0)) as number;
-    }
     const nutritionSummary: NutritionSummary = {
-      total_calories,
-      total_protein: Number(total_protein),
-      total_carbs: Number(total_carbs),
-      total_fat: Number(total_fat),
+      total_calories: Math.round(
+        displayItems.reduce((sum, it) => sum + (it.nutrition.calories || 0), 0)
+      ),
+      total_protein: r1(
+        displayItems.reduce((s, it) => s + (it.nutrition.protein || 0), 0)
+      ) as number,
+      total_carbs: r1(
+        displayItems.reduce((s, it) => s + (it.nutrition.carbs || 0), 0)
+      ) as number,
+      total_fat: r1(
+        displayItems.reduce((s, it) => s + (it.nutrition.fat || 0), 0)
+      ) as number,
     };
 
     // 5) Persist
@@ -677,20 +582,16 @@ export async function saveAdjustedAnalysis(req: Request, res: Response) {
         const n = a.nutrition || base.nutrition;
         const scaled = {
           calories: Math.round(
-            (Number(n?.calories ?? base.nutrition.calories) || 0) * scale
+            (n?.calories ?? base.nutrition.calories) * scale
           ),
-          protein: r1n(
-            (Number(n?.protein ?? base.nutrition.protein) || 0) * scale
-          ),
-          carbs: r1n((Number(n?.carbs ?? base.nutrition.carbs) || 0) * scale),
-          fat: r1n((Number(n?.fat ?? base.nutrition.fat) || 0) * scale),
-          fiber: r1n((Number(n?.fiber ?? base.nutrition.fiber) || 0) * scale),
-          sugar: r1n((Number(n?.sugar ?? base.nutrition.sugar) || 0) * scale),
-          sodium: Math.round(
-            (Number(n?.sodium ?? base.nutrition.sodium) || 0) * scale
-          ),
+          protein: r1n((n?.protein ?? base.nutrition.protein) * scale),
+          carbs: r1n((n?.carbs ?? base.nutrition.carbs) * scale),
+          fat: r1n((n?.fat ?? base.nutrition.fat) * scale),
+          fiber: r1n((n?.fiber ?? base.nutrition.fiber) * scale),
+          sugar: r1n((n?.sugar ?? base.nutrition.sugar) * scale),
+          sodium: Math.round((n?.sodium ?? base.nutrition.sodium) * scale),
           cholesterol: Math.round(
-            (Number(n?.cholesterol ?? base.nutrition.cholesterol) || 0) * scale
+            (n?.cholesterol ?? base.nutrition.cholesterol) * scale
           ),
         };
 
@@ -726,38 +627,43 @@ export async function saveAdjustedAnalysis(req: Request, res: Response) {
         return item;
       });
 
-    // Totals (+ add-ons)
-    let total_calories = 0;
-    let total_protein = 0;
-    let total_carbs = 0;
-    let total_fat = 0;
-    for (const it of finalItems) {
-      total_calories += Math.round(Number(it.nutrition.calories || 0));
-      total_protein = r1(
-        total_protein + Number(it.nutrition.protein || 0)
-      ) as number;
-      total_carbs = r1(total_carbs + Number(it.nutrition.carbs || 0)) as number;
-      total_fat = r1(total_fat + Number(it.nutrition.fat || 0)) as number;
-    }
+    const totals: NutritionSummary = finalItems.reduce(
+      (acc, it) => {
+        acc.total_calories += it.nutrition.calories || 0;
+        acc.total_protein = r1(
+          acc.total_protein + (it.nutrition.protein || 0)
+        ) as number;
+        acc.total_carbs = r1(
+          acc.total_carbs + (it.nutrition.carbs || 0)
+        ) as number;
+        acc.total_fat = r1(acc.total_fat + (it.nutrition.fat || 0)) as number;
+        return acc;
+      },
+      {
+        total_calories: 0,
+        total_protein: 0,
+        total_carbs: 0,
+        total_fat: 0,
+      } as NutritionSummary
+    );
+
     for (const x of addOns) {
-      total_calories += Math.round(Number(x.calories || 0));
-      total_protein = r1(total_protein + Number(x.protein || 0)) as number;
-      total_carbs = r1(total_carbs + Number(x.carbs || 0)) as number;
-      total_fat = r1(total_fat + Number(x.fat || 0)) as number;
+      totals.total_calories += Math.round(Number(x.calories || 0));
+      totals.total_protein = r1(
+        totals.total_protein + Number(x.protein || 0)
+      ) as number;
+      totals.total_carbs = r1(
+        totals.total_carbs + Number(x.carbs || 0)
+      ) as number;
+      totals.total_fat = r1(totals.total_fat + Number(x.fat || 0)) as number;
     }
-    const totals: NutritionSummary = {
-      total_calories,
-      total_protein: Number(total_protein),
-      total_carbs: Number(total_carbs),
-      total_fat: Number(total_fat),
-    };
 
     const adjustedBy: string | null =
       typeof (raw as any).userId === 'string' && (raw as any).userId.trim()
         ? (raw as any).userId.trim()
         : ((row as any).user_id as string | null) || null;
 
-    const { error: updErr } = await supabase
+    const { data: updated, error: updErr } = await supabase
       .from('food_analyses')
       .update({
         adjusted_items: finalItems,
@@ -766,7 +672,9 @@ export async function saveAdjustedAnalysis(req: Request, res: Response) {
         adjusted_by: adjustedBy,
         adjusted_at: new Date().toISOString(),
       })
-      .eq('id', id);
+      .eq('id', id)
+      .select('id, adjusted_by, adjusted_at, feedback_received')
+      .single();
 
     if (updErr) {
       logger.error('[ANALYSIS] Save adjusted failed', updErr);

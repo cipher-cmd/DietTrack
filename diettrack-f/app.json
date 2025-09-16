@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "diettrack-frontend",
+    "slug": "diettrack-frontend",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow DietTrack to use the camera for meal photos.",
+        "NSPhotoLibraryUsageDescription": "Allow DietTrack to access your photo library to analyze meals."
+      },
+      "bundleIdentifier": "com.ciphercmd.diettrackfrontend"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+
+      /**
+       * Tip: With Expo SDK 54 you usually don't need to hardcode permissions.
+       * Image Picker/Camera request them at runtime. If Play Console later
+       * warns for unused permissions, you can explicitly list:
+       *   "permissions": ["android.permission.CAMERA", "android.permission.READ_MEDIA_IMAGES"]
+       */
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow DietTrack to access photos of your meals."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow DietTrack to use the camera for meal photos."
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "runtimeVersion": { "policy": "sdkVersion" },
+    "extra": {
+      "API_URL": "http://192.168.29.7:4000",
+      "eas": { "projectId": "cde55049-5986-4fe7-bf61-a369f798a0dd" }
+    }
+  }
+}

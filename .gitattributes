@@ -1,0 +1,21 @@
+* text=auto eol=lf
+
+# Treat common binary types
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.ico binary
+
+# Lock JSON, TS/JS for diffs to be text
+*.json text
+*.ts text
+*.tsx text
+*.js text
+*.jsx text
+*.css text
+*.scss text
+*.md text
+*.yml text
+*.yaml text

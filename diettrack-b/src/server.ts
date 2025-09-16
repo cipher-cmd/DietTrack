@@ -21,6 +21,7 @@ import ingredientsRoutes from '@/routes/ingredients';
 import { errorHandler } from '@/middleware/errorHandler';
 import { rateLimiter } from '@/middleware/rateLimiter';
 import logger from '@/utils/logger';
+import { getSupabase } from '@/database/supabase';
 
 // ── Required envs ─────────────────────────────────────────────────────────────
 const missing: string[] = [];
@@ -138,12 +139,25 @@ app.get('/health', (_req, res) => {
     service: 'DietTrack Backend API',
     version: process.env.npm_package_version || '1.0.0',
     environment: NODE_ENV,
+    strategy: STRATEGY,
     uptime: Math.floor(process.uptime()),
     memory: {
       used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
       total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
     },
   });
+});
+
+// Readiness (light DB touch)
+app.get('/ready', async (_req, res) => {
+  try {
+    const supabase = getSupabase();
+    // small, fast check
+    await supabase.from('ingredients').select('id').limit(1);
+    res.json({ status: 'READY' });
+  } catch {
+    res.status(503).json({ status: 'DEGRADED' });
+  }
 });
 
 // Routes
@@ -177,14 +191,16 @@ app.get('/api/v1', (_req, res) => {
   });
 });
 
-// Errors & 404
-app.use(errorHandler);
+// 404 LAST, then error handler
 app.use('*', (req, res) => {
   logger.warn('404', { method: req.method, url: req.originalUrl });
   res
     .status(404)
     .json({ success: false, error: 'Route not found', code: 'NOT_FOUND' });
 });
+
+// Error handler must be after all routes (including 404)
+app.use(errorHandler);
 
 // Shutdown
 function shutdown(sig: string) {
@@ -193,6 +209,10 @@ function shutdown(sig: string) {
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Tweak keep-alive to avoid lingering sockets under load
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
 
 server.listen(PORT, () => {
   logger.info(`🚀 DietTrack Backend running on port ${PORT}`);
