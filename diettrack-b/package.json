@@ -1,0 +1,102 @@
+{
+  "name": "diettrack-backend",
+  "version": "1.0.0",
+  "description": "AI-powered Indian food nutrition analysis backend",
+  "main": "dist/server.js",
+  "scripts": {
+    "start": "node dist/server.js",
+    "start:rebuild": "npm run build && node dist/server.js",
+    "start:prod": "cross-env NODE_ENV=production LOG_LEVEL=warn node dist/server.js",
+    "dev": "cross-env NODE_OPTIONS=--unhandled-rejections=strict nodemon -r ts-node/register/transpile-only -r tsconfig-paths/register src/server.ts",
+    "dev:strict": "cross-env NODE_OPTIONS=--unhandled-rejections=strict nodemon -r ts-node/register -r tsconfig-paths/register src/server.ts",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:unit": "jest --testPathPattern=unit",
+    "test:integration": "jest --testPathPattern=integration",
+    "test:ci": "jest --ci --coverage --watchAll=false",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "clean": "rimraf dist",
+    "prebuild": "npm run clean",
+    "postinstall": "npm run build"
+  },
+  "keywords": [
+    "food",
+    "nutrition",
+    "ai",
+    "indian-food",
+    "health",
+    "diet-tracking"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@google-cloud/vision": "^4.3.3",
+    "@google/generative-ai": "^0.2.1",
+    "@supabase/supabase-js": "^2.45.0",
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "expo-image-manipulator": "^14.0.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^6.8.1",
+    "helmet": "^7.2.0",
+    "ioredis": "^5.7.0",
+    "joi": "^17.9.2",
+    "jsonwebtoken": "^9.0.2",
+    "module-alias": "^2.2.3",
+    "pg": "^8.16.3",
+    "rate-limiter-flexible": "^7.3.0",
+    "uuid": "^13.0.0",
+    "winston": "^3.10.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.2",
+    "@types/compression": "^1.7.2",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.23",
+    "@types/helmet": "^0.0.48",
+    "@types/jest": "^29.5.3",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.4",
+    "@types/multer": "^1.4.7",
+    "@types/node": "^20.19.13",
+    "@types/pg": "^8.15.5",
+    "@types/supertest": "^2.0.12",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.2.0",
+    "@typescript-eslint/parser": "^6.2.0",
+    "cross-env": "^7.0.3",
+    "eslint": "^8.45.0",
+    "jest": "^29.6.1",
+    "nodemon": "^3.1.10",
+    "prettier": "^3.0.0",
+    "rimraf": "^5.0.10",
+    "supertest": "^6.3.3",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cipher-cmd/DietTrack.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cipher-cmd/DietTrack/issues"
+  },
+  "homepage": "https://github.com/cipher-cmd/DietTrack#readme",
+  "_moduleAliases": {
+    "@": "dist"
+  }
+}

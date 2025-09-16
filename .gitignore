@@ -1,0 +1,72 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# ========================
+# ROOT LEVEL IGNORES
+# ========================
+
+# Environment variables (CRITICAL - NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.production
+**/.env.development
+
+# Secrets and credentials (CRITICAL)
+**/secrets/
+**/*.key
+**/*.pem
+**/gemini-service-account.json
+**/service-account.json
+
+# Dependencies
+**/node_modules/
+**/npm-debug.*
+**/yarn-debug.*
+**/yarn-error.*
+
+# Build outputs
+**/dist/
+**/build/
+**/.cache/
+
+# Logs
+**/logs/
+**/*.log
+
+# ========================
+# BACKEND SPECIFIC
+# ========================
+
+# Database files
+diettrack-b/*.db
+diettrack-b/*.sqlite
+
+# ========================
+# FRONTEND SPECIFIC
+# ========================
+
+# Expo
+diettrack-f/.expo/
+diettrack-f/web-build/
+diettrack-f/expo-env.d.ts
+
+# Native
+diettrack-f/.kotlin/
+diettrack-f/*.orig.*
+diettrack-f/*.jks
+diettrack-f/*.mobileprovision
+
+# Metro
+diettrack-f/.metro-health-check*
+
+# TypeScript
+**/*.tsbuildinfo
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo

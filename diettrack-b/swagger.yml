@@ -1,0 +1,24 @@
+openapi: 3.0.0
+info:
+  title: DietTrack API
+  version: 1.0.0
+  description: API for food recognition, nutrition, and user management.
+servers:
+  - url: http://localhost:4000/api/v1
+paths:
+  /user/create:
+    post:
+      summary: Create user
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone: { type: string }
+                name: { type: string }
+                location: { type: string }
+      responses:
+        '200':
+          description: OK
+  # Add other endpoints as needed
