@@ -5,11 +5,12 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "dev": "expo start -c",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "clean": "rimraf node_modules package-lock.json .expo && npm cache clean --force"
+    "dev": "expo start -c",
+    "clean": "rimraf node_modules package-lock.json .expo && npm cache clean --force",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",

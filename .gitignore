@@ -4,11 +4,12 @@
 
 # Env & secrets (CRITICAL - never commit)
 .env
-.env.*.local
+.env.*
 **/.env
-**/.env.local
-**/.env.production
-**/.env.development
+**/.env.*
+!.env.sample
+diettrack-b/.env
+diettrack-f/.env
 **/secrets/
 **/*.key
 **/*.pem
@@ -29,6 +30,8 @@
 **/.turbo/
 **/.vercel/
 **/.parcel-cache/
+**/.swc/
+**/.eslintcache
 
 # Logs
 **/logs/

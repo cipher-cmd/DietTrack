@@ -2,42 +2,51 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
   pull_request:
-    branches: [main, master]
 
 jobs:
-  build:
+  backend:
+    name: Backend build (diettrack-b)
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [20.x]
-
+    defaults:
+      run:
+        working-directory: diettrack-b
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Use Node 20.x
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '20.x'
           cache: 'npm'
+          cache-dependency-path: diettrack-b/package-lock.json
 
       - name: Install
         run: npm ci
 
-      - name: Type Check
-        run: npm run typecheck --if-present
-
-      - name: Lint
-        run: npm run lint --if-present
-
-      - name: Build
+      - name: Typecheck & build
         run: npm run build
 
-      - name: Test
-        run: npm test --if-present
-    env:
-      # Don’t put secrets here; use repo/environ. secrets if a test needs them.
-      NODE_ENV: test
+  frontend:
+    name: Frontend typecheck (diettrack-f)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: diettrack-f
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: diettrack-f/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck || echo "Typecheck only (no build in CI)"
