@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false, // emit JS on build
+    "rootDir": "src", // only compile app code
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["tests", "**/*.test.ts", "**/*.spec.ts", "node_modules"]
+}

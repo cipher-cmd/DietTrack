@@ -6,7 +6,7 @@ on:
 
 jobs:
   backend:
-    name: Backend build (diettrack-b)
+    name: Backend (diettrack-b)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -25,11 +25,27 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Typecheck & build
+      - name: Typecheck & Build
         run: npm run build
 
+      - name: Test
+        env:
+          NODE_ENV: test
+          SUPABASE_URL: http://localhost/dummy
+          SUPABASE_SERVICE_ROLE_KEY: dummy
+          AI_STRATEGY: gemini_only
+          GEMINI_API_KEY: dummy
+        run: npm test -- --ci --reporters=default --reporters=jest-junit
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-junit-backend
+          path: diettrack-b/junit.xml
+
   frontend:
-    name: Frontend typecheck (diettrack-f)
+    name: Frontend (diettrack-f)
     runs-on: ubuntu-latest
     defaults:
       run:

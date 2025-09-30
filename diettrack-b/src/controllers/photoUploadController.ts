@@ -1,3 +1,4 @@
+// src/controllers/photoUploadController.ts
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getSupabase } from '@/database/supabase';
@@ -106,21 +107,43 @@ export const uploadPhoto = async (
       });
     }
 
-    // Public URL (if bucket is public). If private, switch to createSignedUrl.
-    const { data: publicUrlData } = supabase.storage
-      .from(bucket)
-      .getPublicUrl(filePath);
+    // Prefer signed URLs when bucket is private (configurable)
+    const signedSeconds = Number(process.env.SIGNED_URL_TTL_SEC || 0);
+
+    let publicUrl: string;
+    if (signedSeconds > 0) {
+      const { data: signed, error: signErr } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(filePath, signedSeconds);
+      if (signErr || !signed?.signedUrl) {
+        logger.warn(
+          '[UPLOAD] Signed URL generation failed, falling back to public URL',
+          signErr
+        );
+        const { data: pub } = supabase.storage
+          .from(bucket)
+          .getPublicUrl(filePath);
+        publicUrl = pub.publicUrl;
+      } else {
+        publicUrl = signed.signedUrl;
+      }
+    } else {
+      const { data: pub } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(filePath);
+      publicUrl = pub.publicUrl;
+    }
 
     logger.info('[UPLOAD] Success', {
       userId,
       filePath,
-      publicUrl: publicUrlData.publicUrl,
+      publicUrl,
     });
 
     return res.json({
       success: true,
       data: {
-        imageUrl: publicUrlData.publicUrl,
+        imageUrl: publicUrl,
         fileName: filePath,
         fileSize: imageBuffer.length,
       },

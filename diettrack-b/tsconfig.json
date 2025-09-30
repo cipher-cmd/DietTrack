@@ -3,37 +3,23 @@
     "target": "ES2020",
     "module": "CommonJS",
     "lib": ["ES2020"],
-    "rootDir": "src",
+    "rootDir": ".", // <- project root so tests are included
     "outDir": "dist",
     "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    },
-    "types": ["node", "jsonwebtoken"],
-
+    "paths": { "@/*": ["src/*"] },
+    "types": ["node", "jest"],
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "moduleResolution": "node",
+    "isolatedModules": true,
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "sourceMap": true,
     "forceConsistentCasingInFileNames": true,
     "noImplicitReturns": true,
-    "declaration": false,
-    "removeComments": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "noEmit": true // <- editor/test config emits nothing
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"],
-  "ts-node": {
-    "require": ["tsconfig-paths/register"],
-    "files": true,
-    "transpileOnly": true,
-    "esm": false
-  }
+  "include": ["src/**/*.ts", "tests/**/*.ts", "jest.config.js"],
+  "exclude": ["node_modules", "dist"]
 }

@@ -14,6 +14,9 @@ AI-powered Indian food nutrition analysis.
 cp .env.sample .env
 # fill in values
 
+![Backend CI](https://github.com/cipher-cmd/DietTrack-/actions/workflows/ci.yml/badge.svg)
+
+
 npm ci
 npm run build
 npm start

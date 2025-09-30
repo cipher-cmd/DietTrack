@@ -148,3 +148,150 @@ export async function lookupIngredient(
   }>(res);
   return json?.data?.matches || [];
 }
+
+// User profile and data endpoints
+export type UserProfile = {
+  id: string;
+  name: string;
+  email: string;
+  age: number;
+  gender: string;
+  height_cm: number;
+  weight_kg: number;
+  activity_level: string;
+  fitness_goal: string;
+  daily_calorie_target: number;
+  macro_targets: {
+    protein: number;
+    carbs: number;
+    fats: number;
+  };
+  dietary_preferences: string[];
+  allergies: string[];
+  subscription_status: string;
+};
+
+export type DailyStats = {
+  calories_consumed: number;
+  protein_consumed: number;
+  carbs_consumed: number;
+  fats_consumed: number;
+  fiber_consumed: number;
+  sugar_consumed: number;
+  sodium_consumed: number;
+  water_intake_ml: number;
+};
+
+export type RecentMeal = {
+  id: string;
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  image?: string;
+  loggedAt: string;
+};
+
+export async function getUserProfile(userId: string): Promise<UserProfile> {
+  const res = await fetch(`${API}/user/${userId}/profile`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(`Get profile failed (${res.status}): ${msg.slice(0, 200)}`);
+  }
+
+  const json = await asJson<{ success: boolean; data: UserProfile }>(res);
+  return json.data;
+}
+
+export async function getUserDailyStats(
+  userId: string,
+  date?: string
+): Promise<DailyStats> {
+  const url = date
+    ? `${API}/user/${userId}/daily-stats?date=${encodeURIComponent(date)}`
+    : `${API}/user/${userId}/daily-stats`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(
+      `Get daily stats failed (${res.status}): ${msg.slice(0, 200)}`
+    );
+  }
+
+  const json = await asJson<{ success: boolean; data: DailyStats }>(res);
+  return json.data;
+}
+
+export async function getUserRecentMeals(
+  userId: string,
+  limit = 10
+): Promise<RecentMeal[]> {
+  const res = await fetch(`${API}/user/${userId}/recent-meals?limit=${limit}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(
+      `Get recent meals failed (${res.status}): ${msg.slice(0, 200)}`
+    );
+  }
+
+  const json = await asJson<{ success: boolean; data: RecentMeal[] }>(res);
+  return json.data;
+}
+
+export async function updateUserProfile(
+  userId: string,
+  updates: Partial<UserProfile>
+): Promise<UserProfile> {
+  const res = await fetch(`${API}/user/${userId}/profile`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(
+      `Update profile failed (${res.status}): ${msg.slice(0, 200)}`
+    );
+  }
+
+  const json = await asJson<{ success: boolean; data: UserProfile }>(res);
+  return json.data;
+}
+
+export async function getAnalysisHistory(
+  userId: string,
+  limit = 10
+): Promise<RecentMeal[]> {
+  const res = await fetch(
+    `${API}/analysis/history?userId=${userId}&limit=${limit}`,
+    {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    }
+  );
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(
+      `Get analysis history failed (${res.status}): ${msg.slice(0, 200)}`
+    );
+  }
+
+  const json = await asJson<{ success: boolean; data: RecentMeal[] }>(res);
+  return json.data || [];
+}

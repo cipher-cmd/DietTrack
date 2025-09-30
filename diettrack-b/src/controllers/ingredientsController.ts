@@ -16,16 +16,20 @@ export async function ingredientsLookup(req: Request, res: Response) {
   const limit = Number(req.query.limit || 8);
 
   if (!name || !name.trim()) {
-    return res
-      .status(400)
-      .json({ success: false, error: 'name (or q) is required' });
+    return res.status(400).json({
+      success: false,
+      error: 'name (or q) is required',
+      code: 'BAD_INPUT',
+    });
   }
 
   const { matches, error } = await lookupIngredientsByName(name.trim(), limit);
   if (error) {
-    return res
-      .status(500)
-      .json({ success: false, error: error.message || 'Lookup failed' });
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Lookup failed',
+      code: 'DATABASE_ERROR',
+    });
   }
 
   return res.json({ success: true, data: { matches } });

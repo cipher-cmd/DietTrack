@@ -36,14 +36,14 @@ const npos = (v: unknown, fallback = 0) => {
   return Number.isFinite(x) && x > 0 ? x : fallback;
 };
 
-// NEW: normalize phrase like "1 bowl rice" => "rice"
-function normalizeBaseTerm(q: string): string {
+// Normalize phrase like "1 bowl rice" => "rice"
+export function normalizeBaseTerm(q: string): string {
   const s = (q || '').toLowerCase();
   // remove counts (1, 2x, 1.5x)
   let t = s.replace(/\b\d+(\.\d+)?\s*(x|×)?\b/g, ' ');
   // remove measure words
   const MEASURES =
-    'bowl|katori|cup|cups|plate|spoon|tbsp|tsp|glass|ml|gm|g|gram|grams|kg|piece|pieces|pcs|slice|slices';
+    'bowl|katori|cup|cups|plate|spoon|tbsp|tsp|glass|ml|l|litre|gm|g|gram|grams|kg|piece|pieces|pcs|slice|slices';
   t = t.replace(new RegExp(`\\b(${MEASURES})\\b`, 'g'), ' ');
   // remove glue words
   t = t.replace(/\b(of|with|and|in|on|a|an|the)\b/g, ' ');
@@ -83,7 +83,7 @@ export async function enrichDetectedItemsWithDB(
       if (!termRaw) return item;
 
       const termLower = termRaw.toLowerCase();
-      const baseTerm = normalizeBaseTerm(termLower); // <— "1 bowl rice" => "rice"
+      const baseTerm = normalizeBaseTerm(termLower); // "1 bowl rice" => "rice"
       const tryTerms = Array.from(
         new Set([termLower, baseTerm].filter(Boolean))
       );
@@ -218,4 +218,37 @@ export async function enrichDetectedItemsWithDB(
       return updated;
     })
   );
+}
+
+type DbHintRow = { hint?: string; name?: string } | string;
+
+export async function dbTopHintsFromPrompt(
+  prompt: string,
+  maxResults = 5
+): Promise<string[]> {
+  const query = (prompt || '').trim();
+  if (!query) return [];
+
+  try {
+    const supabase = getSupabase();
+    const { data, error } = await supabase.rpc('db_top_hints_from_prompt', {
+      prompt: query,
+      max_results: maxResults,
+    });
+
+    if (error || !Array.isArray(data)) {
+      return [];
+    }
+
+    return (data as DbHintRow[])
+      .map((row) => {
+        if (typeof row === 'string') return row.trim();
+        const value = row?.hint ?? row?.name ?? '';
+        return typeof value === 'string' ? value.trim() : '';
+      })
+      .filter((hint) => hint.length > 0)
+      .slice(0, maxResults);
+  } catch {
+    return [];
+  }
 }

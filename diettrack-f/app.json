@@ -25,13 +25,6 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       }
-
-      /**
-       * Tip: With Expo SDK 54 you usually don't need to hardcode permissions.
-       * Image Picker/Camera request them at runtime. If Play Console later
-       * warns for unused permissions, you can explicitly list:
-       *   "permissions": ["android.permission.CAMERA", "android.permission.READ_MEDIA_IMAGES"]
-       */
     },
     "plugins": [
       [
@@ -45,15 +38,20 @@
         {
           "cameraPermission": "Allow DietTrack to use the camera for meal photos."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "runtimeVersion": { "policy": "sdkVersion" },
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
     "extra": {
       "API_URL": "http://192.168.29.7:4000",
-      "eas": { "projectId": "cde55049-5986-4fe7-bf61-a369f798a0dd" }
+      "eas": {
+        "projectId": "cde55049-5986-4fe7-bf61-a369f798a0dd"
+      }
     }
   }
 }

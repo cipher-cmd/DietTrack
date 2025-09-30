@@ -1,45 +1,30 @@
 // src/controllers/analysisController.ts
-// Production-ready analysis controller:
-// - Validates input (photo OR prompt)
+// MVP controller wired to `meal_logs` table.
+// - Accepts photo OR text prompt
 // - Runs model(s) + IFCT enrichment
-// - DB-grounding pass (ingredients/recipes + personal aliases/servings)
 // - Summarizes macros
-// - Persists analysis safely
-// - Clean logs and stable response shape
+// - Persists one cohesive meal_log row
+// - Stable response shape for app
 
 import { Request, Response } from 'express';
-import { v4 as uuidv4, validate as uuidValidate } from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { getSupabase } from '@/database/supabase';
-import { aiAnalysisService } from '@/services/aiAnalysis';
+import { analyzeImage } from '@/services/aiAnalysis';
 import { enrichWithIFCTData, getIFCTFoodByName } from '@/services/ifctService';
-import {
-  enrichDetectedItemsWithDB,
-  dbTopHintsFromPrompt,
-} from '@/services/nutritionEnricher';
 import { hashBase64Image, validateBase64Image } from '@/utils/imageHash';
 import logger from '@/utils/logger';
 import type {
   AnalysisRequest,
-  AnalysisResponse,
   ApiResponse,
   DetectedFoodItem,
   ServingSize,
 } from '@/types';
 
-type NutritionSummary = {
-  total_calories: number;
-  total_protein: number;
-  total_carbs: number;
-  total_fat: number;
-};
-
-type AnalysisResponseWithSummary = AnalysisResponse & {
-  nutritionSummary: NutritionSummary;
-};
-
+// ──────────────────────────────────────────────────────────────────────────────
+// Utils
+// ──────────────────────────────────────────────────────────────────────────────
 const r1 = (n: unknown) => Math.round((Number(n) || 0) * 10) / 10;
 const clamp0 = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0);
-
 const zNut = () => ({
   calories: 0,
   protein: 0,
@@ -51,7 +36,91 @@ const zNut = () => ({
   cholesterol: 0,
 });
 
-// ── IFCT helpers ──────────────────────────────────────────────────────────────
+type NutritionSummary = {
+  total_calories: number;
+  total_protein: number;
+  total_carbs: number;
+  total_fat: number;
+};
+
+type IngredientAddOn = {
+  name: string;
+  grams?: number;
+  unit?: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+};
+type AddOnInput = Partial<IngredientAddOn> & { name?: string };
+
+// grams-only add-on inference (quick presets)
+const addOnR1 = (n: number) => Math.round(n * 10) / 10;
+const ADD_ON_PRESETS = [
+  {
+    test: (s: string) => s.includes('ghee') || s.includes('oil'),
+    cal_g: 9,
+    pro_g: 0,
+    carb_g: 0,
+    fat_g: 1,
+  },
+  {
+    test: (s: string) => s.includes('butter'),
+    cal_g: 7.2,
+    pro_g: 0.01,
+    carb_g: 0.01,
+    fat_g: 0.8,
+  },
+  {
+    test: (s: string) => s.includes('cheese') || s.includes('paneer'),
+    cal_g: 4.0,
+    pro_g: 0.25,
+    carb_g: 0.02,
+    fat_g: 0.33,
+  },
+];
+function inferAddOnFromPreset(name: string, grams: number) {
+  const key = name.toLowerCase();
+  const p = ADD_ON_PRESETS.find((x) => x.test(key));
+  if (!p) return null;
+  return {
+    calories: Math.round(p.cal_g * grams),
+    protein: addOnR1(p.pro_g * grams),
+    carbs: addOnR1(p.carb_g * grams),
+    fat: addOnR1(p.fat_g * grams),
+  };
+}
+function normalizeAddOns(addOns: AddOnInput[]): IngredientAddOn[] {
+  if (!Array.isArray(addOns) || !addOns.length) return [];
+  return addOns
+    .map((raw) => {
+      const name = String(raw?.name || '').trim();
+      if (!name) return null;
+      const grams = clamp0(Number(raw?.grams ?? 0));
+      const unit = raw?.unit ? String(raw.unit).trim() : undefined;
+      const provided = {
+        calories: Math.round(Math.max(0, Number(raw?.calories ?? 0))),
+        protein: addOnR1(Math.max(0, Number(raw?.protein ?? 0))),
+        carbs: addOnR1(Math.max(0, Number(raw?.carbs ?? 0))),
+        fat: addOnR1(Math.max(0, Number(raw?.fat ?? 0))),
+      };
+      const hasProvided = Object.values(provided).some((v) => v > 0);
+      const inferred =
+        !hasProvided && grams ? inferAddOnFromPreset(name, grams) : null;
+      const macros = inferred || provided;
+      if (!macros.calories && !macros.protein && !macros.carbs && !macros.fat)
+        return null;
+      return {
+        name,
+        grams: grams || undefined,
+        unit,
+        ...macros,
+      } as IngredientAddOn;
+    })
+    .filter(Boolean) as IngredientAddOn[];
+}
+
+// IFCT helpers
 function toIFCTDetectFormat(items: ReadonlyArray<any>) {
   return items.map((it, idx) => ({
     itemId: Number(it.itemId ?? idx + 1),
@@ -65,7 +134,6 @@ function toIFCTDetectFormat(items: ReadonlyArray<any>) {
     source: it.source || 'ai',
   }));
 }
-
 function mapEnrichedToDetected(
   enriched: any[],
   raw: DetectedFoodItem[]
@@ -73,17 +141,14 @@ function mapEnrichedToDetected(
   const byId = new Map<number, DetectedFoodItem>(
     raw.map((it) => [Number(it.itemId), it])
   );
-
   return enriched.map((e, idx) => {
     const id = Number(e.itemId ?? idx + 1);
     const base = byId.get(id) || raw[idx];
-
     const grams =
       e.portion_g ??
       e.portion_size_g ??
       base?.portionSize?.estimatedGrams ??
       100;
-
     const servingSizeCategory: ServingSize =
       grams < 80 ? 'small' : grams > 200 ? 'large' : 'medium';
 
@@ -108,27 +173,13 @@ function mapEnrichedToDetected(
       )
     );
 
-    const per100 =
-      grams > 0
-        ? {
-            calories: Math.round((n_cal * 100) / grams),
-            protein: r1((n_pro * 100) / grams),
-            carbs: r1((n_car * 100) / grams),
-            fat: r1((n_fat * 100) / grams),
-            fiber: r1((n_fib * 100) / grams),
-            sugar: r1((n_sug * 100) / grams),
-            sodium: Math.round((n_sod * 100) / grams),
-            cholesterol: Math.round((n_cho * 100) / grams),
-          }
-        : { ...zNut() };
-
     const item: DetectedFoodItem = {
       itemId: id,
       name: e.display_name || e.ifct_name || e.name || base?.name || 'food',
       confidence:
         typeof e.confidence === 'number'
           ? Math.max(0, Math.min(1, e.confidence))
-          : (base?.confidence ?? 0.6),
+          : base?.confidence ?? 0.6,
       region: base?.region ?? { x: 100, y: 100, width: 200, height: 200 },
       nutrition: {
         calories: n_cal,
@@ -153,27 +204,32 @@ function mapEnrichedToDetected(
       ingredients: base?.ingredients ?? [],
     };
 
-    (item as any).nutritionPer100g = (base as any)?.nutritionPer100g || per100;
+    (item as any).nutritionPer100g = (base as any)?.nutritionPer100g || {
+      calories: grams ? Math.round((n_cal * 100) / grams) : 0,
+      protein: grams ? r1(((n_pro as number) * 100) / grams) : 0,
+      carbs: grams ? r1(((n_car as number) * 100) / grams) : 0,
+      fat: grams ? r1(((n_fat as number) * 100) / grams) : 0,
+      fiber: grams ? r1(((n_fib as number) * 100) / grams) : 0,
+      sugar: grams ? r1(((n_sug as number) * 100) / grams) : 0,
+      sodium: grams ? Math.round((n_sod * 100) / grams) : 0,
+      cholesterol: grams ? Math.round((n_cho * 100) / grams) : 0,
+    };
     return item;
   });
 }
 
-// ── Text-only parse (fallback when no image) ──────────────────────────────────
+// text fallback
 async function parseTextToItems(text: string): Promise<DetectedFoodItem[]> {
   const parts = text
     .split(/[,+/&]| with | and /i)
     .map((s) => s.trim())
     .filter(Boolean);
-
   const out: DetectedFoodItem[] = [];
-
   for (const p of parts) {
     const ifct = await getIFCTFoodByName(p);
     const portionG = clamp0((ifct as any)?.serving_size_g) || 150;
-    let serving: ServingSize = 'medium';
-    if (portionG < 80) serving = 'small';
-    else if (portionG > 200) serving = 'large';
-
+    const serving: ServingSize =
+      portionG < 80 ? 'small' : portionG > 200 ? 'large' : 'medium';
     const item: DetectedFoodItem = {
       itemId: out.length + 1,
       name: p.toLowerCase(),
@@ -192,13 +248,10 @@ async function parseTextToItems(text: string): Promise<DetectedFoodItem[]> {
       cookingMethod: 'boiled',
       ingredients: [],
     };
-
     (item as any).nutritionPer100g = zNut();
     out.push(item);
   }
-
   if (out.length) return out;
-
   const portionG = 150;
   const fallback: DetectedFoodItem = {
     itemId: 1,
@@ -219,16 +272,17 @@ async function parseTextToItems(text: string): Promise<DetectedFoodItem[]> {
   return [fallback];
 }
 
-// ── Controllers ───────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
+// Controllers
+// ──────────────────────────────────────────────────────────────────────────────
 export const analyzeFood = async (
   req: Request,
   res: Response
-): Promise<Response<ApiResponse<AnalysisResponseWithSummary>>> => {
+): Promise<Response<ApiResponse<any>>> => {
   const started = Date.now();
   const reqId = uuidv4();
 
   try {
-    // Accept JSON body or JSON-stringified body
     const rawBody =
       typeof req.body === 'string'
         ? (() => {
@@ -239,20 +293,23 @@ export const analyzeFood = async (
             }
           })()
         : req.body || {};
-
-    const payload: AnalysisRequest & { userId?: string } = {
+    const payload: AnalysisRequest & {
+      userId?: string;
+      addOns?: AddOnInput[];
+    } = {
       image: String(rawBody.image ?? ''),
       userContext: rawBody.userContext ?? rawBody.user_context ?? {},
       referenceObject: rawBody.referenceObject ?? rawBody.reference_object,
     };
     const userId: string | undefined = rawBody.userId;
-
-    // 🔧 Normalize image to guaranteed string and use it everywhere
+    const addOns = normalizeAddOns(
+      Array.isArray(rawBody.addOns) ? rawBody.addOns : []
+    );
+    const promptText: string = String(
+      (payload.userContext as any)?.prompt ?? rawBody.prompt ?? ''
+    ).trim();
     const image: string =
       typeof payload.image === 'string' ? payload.image : '';
-    const promptText: string = String(
-      (payload.userContext as any)?.prompt ?? ''
-    ).trim();
     const hasImage = image.length > 0;
     const hasPrompt = promptText.length > 0;
 
@@ -264,7 +321,11 @@ export const analyzeFood = async (
       });
     }
 
-    logger.info(`[ANALYSIS START] id=${reqId} user=${userId || 'anon'}`);
+    logger.info(
+      `[ANALYSIS START] id=${reqId} user=${userId || 'anon'} src=${
+        hasImage ? 'image' : 'prompt'
+      }`
+    );
 
     let imageHash: string | null = null;
     if (hasImage) {
@@ -278,37 +339,27 @@ export const analyzeFood = async (
       imageHash = hashBase64Image(image);
     }
 
-    // Optional model hints from DB; non-fatal
-    let dbHints: string[] = [];
-    try {
-      if (hasPrompt) dbHints = await dbTopHintsFromPrompt(promptText, 6);
-    } catch {
-      /* ignore */
-    }
-
-    // 1) AI + combine (or text parse), with fallback when image finds nothing
+    // 1) detect
     let detectedRaw: DetectedFoodItem[] = [];
     if (hasImage) {
-      const analyses = await aiAnalysisService.multiModelAnalysis({
-        image,
-        userContext: { ...(payload.userContext as any), dbHints },
+      const ai = await analyzeImage({
+        imageBase64: image,
+        userContext: payload.userContext as any,
         referenceObject: payload.referenceObject as any,
         userId,
       });
-      const combined = aiAnalysisService.combineAnalysisResults(analyses);
-      detectedRaw = [...combined.detectedItems];
-
+      detectedRaw = Array.isArray(ai?.detectedItems)
+        ? (ai.detectedItems as DetectedFoodItem[])
+        : [];
       if (detectedRaw.length === 0 && hasPrompt) {
-        logger.info(
-          `[ANALYSIS] empty image detections; fallback to prompt parse`
-        );
+        logger.info(`[ANALYSIS] empty detections; fallback to prompt parse`);
         detectedRaw = await parseTextToItems(promptText);
       }
     } else {
       detectedRaw = await parseTextToItems(promptText);
     }
 
-    // 2) IFCT enrichment (non-fatal)
+    // 2) IFCT enrichment
     const normalized = toIFCTDetectFormat(detectedRaw);
     let enriched: any[] = [];
     try {
@@ -318,24 +369,13 @@ export const analyzeFood = async (
       enriched = normalized;
     }
 
-    // 3) Build UI items
-    let displayItems: DetectedFoodItem[] = mapEnrichedToDetected(
+    // 3) final UI items
+    const displayItems: DetectedFoodItem[] = mapEnrichedToDetected(
       enriched,
       detectedRaw
     );
 
-    // 3.1) DB-grounding pass (personal aliases/servings + recipes). Non-fatal
-    try {
-      displayItems = await enrichDetectedItemsWithDB(displayItems, userId);
-      logger.debug('[DB ENRICH] after', {
-        names: displayItems.map((d) => d.name),
-        grams: displayItems.map((d) => d.portionSize?.estimatedGrams),
-      });
-    } catch (e) {
-      logger.warn('[DB ENRICH] fallback to IFCT-only due to error', e);
-    }
-
-    // 4) Summary
+    // 4) totals
     const nutritionSummary: NutritionSummary = {
       total_calories: Math.round(
         displayItems.reduce((sum, it) => sum + (it.nutrition.calories || 0), 0)
@@ -350,48 +390,80 @@ export const analyzeFood = async (
         displayItems.reduce((s, it) => s + (it.nutrition.fat || 0), 0)
       ) as number,
     };
+    for (const x of addOns) {
+      nutritionSummary.total_calories += Math.round(Number(x.calories || 0));
+      nutritionSummary.total_protein = r1(
+        nutritionSummary.total_protein + Number(x.protein || 0)
+      ) as number;
+      nutritionSummary.total_carbs = r1(
+        nutritionSummary.total_carbs + Number(x.carbs || 0)
+      ) as number;
+      nutritionSummary.total_fat = r1(
+        nutritionSummary.total_fat + Number(x.fat || 0)
+      ) as number;
+    }
 
-    // 5) Persist
+    // 5) persist to meal_logs
     const supabase = getSupabase();
-    const analysisId = uuidv4();
+    const summaryText = `${displayItems[0]?.name ?? 'Meal'}${
+      displayItems.length > 1 ? ` + ${displayItems.length - 1} more` : ''
+    } • ~${nutritionSummary.total_calories} kcal • ${
+      nutritionSummary.total_protein
+    }g P`;
 
-    const { error: insertError } = await supabase.from('food_analyses').insert({
-      id: analysisId,
-      user_id: userId || null,
-      image_hash: imageHash,
-      detected_items: displayItems,
-      confidence_score: displayItems.length
-        ? displayItems.reduce((s, it) => s + (it.confidence || 0.5), 0) /
-          displayItems.length
-        : 0.5,
-      processing_time_ms: Date.now() - started,
-      feedback_received: false,
-      nutrition_summary: nutritionSummary,
-    });
+    const { data: inserted, error: insertError } = await supabase
+      .from('meal_logs')
+      .insert([
+        {
+          user_id: userId || null,
+          source: hasImage ? 'photo' : 'text',
+          source_ref: null, // hook this to uploads table later if needed
+          items: displayItems,
+          add_ons: addOns,
+          portion_scalar: 1.0,
+          nutrition_total: {
+            kcal: nutritionSummary.total_calories,
+            protein_g: nutritionSummary.total_protein,
+            carbs_g: nutritionSummary.total_carbs,
+            fat_g: nutritionSummary.total_fat,
+          },
+          nutrition_breakdown: {
+            items: displayItems.map((d) => ({
+              itemId: d.itemId,
+              grams: d.portionSize.estimatedGrams,
+              ...d.nutrition,
+            })),
+            add_ons: addOns,
+          },
+          summary: summaryText,
+        },
+      ])
+      .select('id, logged_at')
+      .single();
 
-    if (insertError) {
-      logger.error(`[ANALYSIS] DB insert failed id=${reqId}`, insertError);
+    if (insertError || !inserted) {
+      logger.error('[ANALYZE] DB insert failed', insertError);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to save meal log',
+        code: 'DATABASE_ERROR',
+      });
     }
 
     const processingTime = Date.now() - started;
-
-    const response: AnalysisResponseWithSummary = {
-      analysisId,
-      detectedItems: displayItems,
-      overallConfidence: displayItems.length
-        ? displayItems.reduce((s, it) => s + (it.confidence || 0.5), 0) /
-          displayItems.length
-        : 0.5,
-      processing_time: `${processingTime}ms`,
-      nutritionSummary,
-    };
-
-    logger.info(
-      `[ANALYSIS OK] id=${reqId} analysis=${analysisId} items=${displayItems.length} ms=${processingTime}`
-    );
-    return res.json({ success: true, data: response });
+    return res.json({
+      success: true,
+      data: {
+        meal_log_id: inserted.id,
+        logged_at: inserted.logged_at,
+        items: displayItems,
+        add_ons: addOns,
+        nutritionSummary,
+        processing_time: `${processingTime}ms`,
+      },
+    });
   } catch (error) {
-    logger.error(`[ANALYSIS ERR] id=${reqId}`, error);
+    logger.error('[ANALYSIS ERR]', error);
     return res.status(500).json({
       success: false,
       error: 'Analysis failed due to server error',
@@ -400,11 +472,10 @@ export const analyzeFood = async (
   }
 };
 
-// ── History ───────────────────────────────────────────────────────────────────
+// History -> meal_logs
 export const getAnalysisHistory = async (req: Request, res: Response) => {
   try {
     const { userId, limit = '20', offset = '0' } = req.query;
-
     if (!userId) {
       return res.status(400).json({
         success: false,
@@ -412,18 +483,15 @@ export const getAnalysisHistory = async (req: Request, res: Response) => {
         code: 'MISSING_USER_ID',
       });
     }
-
     const parsedLimit = Math.min(parseInt(String(limit)) || 20, 100);
     const parsedOffset = parseInt(String(offset)) || 0;
 
     const supabase = getSupabase();
     const { data, error } = await supabase
-      .from('food_analyses')
-      .select(
-        'id, created_at, confidence_score, detected_items, nutrition_summary, feedback_received'
-      )
+      .from('meal_logs')
+      .select('*')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
+      .order('logged_at', { ascending: false })
       .range(parsedOffset, parsedOffset + parsedLimit - 1);
 
     if (error) {
@@ -454,256 +522,36 @@ export const getAnalysisHistory = async (req: Request, res: Response) => {
   }
 };
 
-// ── By ID ─────────────────────────────────────────────────────────────────────
+// By ID -> meal_logs
 export const getAnalysisById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     if (!id)
       return res.status(400).json({
         success: false,
-        error: 'Analysis ID is required',
+        error: 'Meal log ID is required',
         code: 'MISSING_ID',
       });
 
     const supabase = getSupabase();
     const { data, error } = await supabase
-      .from('food_analyses')
-      .select(
-        'id, detected_items, image_url, confidence_score, created_at, user_id, image_hash, processing_time_ms, nutrition_summary, feedback_received, adjusted_items, adjusted_nutrition_summary, adjusted_by, adjusted_at'
-      )
+      .from('meal_logs')
+      .select('*')
       .eq('id', id)
       .single();
 
-    if (error || !data) {
+    if (error || !data)
       return res.status(404).json({
         success: false,
-        error: 'Analysis not found',
+        error: 'Meal log not found',
         code: 'NOT_FOUND',
       });
-    }
-
     return res.json({ success: true, data });
   } catch {
     return res.status(500).json({
       success: false,
-      error: 'Failed to fetch analysis',
+      error: 'Failed to fetch meal log',
       code: 'INTERNAL_ERROR',
     });
   }
 };
-
-// ── Save Adjusted ─────────────────────────────────────────────────────────────
-export async function saveAdjustedAnalysis(req: Request, res: Response) {
-  const { id } = req.params;
-  if (!id || !uuidValidate(id)) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid analysis id',
-      code: 'BAD_ID',
-    });
-  }
-
-  try {
-    const supabase = getSupabase();
-
-    const { data: row, error: fetchErr } = await supabase
-      .from('food_analyses')
-      .select('detected_items, user_id')
-      .eq('id', id)
-      .single();
-
-    if (fetchErr || !row) {
-      return res.status(404).json({
-        success: false,
-        error: 'Original analysis not found',
-        code: 'NOT_FOUND',
-      });
-    }
-
-    const raw =
-      typeof req.body === 'string'
-        ? (() => {
-            try {
-              return JSON.parse(req.body);
-            } catch {
-              return {};
-            }
-          })()
-        : req.body || {};
-
-    const adjusted = Array.isArray(raw.adjustedItems)
-      ? (raw.adjustedItems as DetectedFoodItem[])
-      : [];
-    const addOns = Array.isArray(raw.ingredientAddOns)
-      ? (raw.ingredientAddOns as Array<{
-          name?: string;
-          calories?: number;
-          protein?: number;
-          carbs?: number;
-          fat?: number;
-        }>)
-      : [];
-
-    if (!adjusted.length) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid payload: adjustedItems[] is required',
-        code: 'BAD_PAYLOAD',
-      });
-    }
-
-    const baseItems: DetectedFoodItem[] = (row as any).detected_items || [];
-    const baseById = new Map<number, DetectedFoodItem>(
-      baseItems.map((it) => [Number(it.itemId), it])
-    );
-
-    const unknownIds = adjusted
-      .map((a: any) => Number(a?.itemId))
-      .filter((x: number) => !baseById.has(x));
-
-    if (unknownIds.length === adjusted.length) {
-      return res.status(400).json({
-        success: false,
-        error: `Unknown itemIds: [${unknownIds.join(', ')}]`,
-        code: 'BAD_PAYLOAD',
-      });
-    }
-
-    const r1n = (n: number) => Math.round(n * 10) / 10;
-
-    const finalItems: DetectedFoodItem[] = adjusted
-      .filter((a: any) => baseById.has(Number(a?.itemId)))
-      .map((a: any) => {
-        const base = baseById.get(Number(a.itemId))!;
-        const oldG = Number(base?.portionSize?.estimatedGrams || 0) || 100;
-        const newG = Number(a?.portionSize?.estimatedGrams ?? oldG) || oldG;
-        const scale = oldG > 0 ? newG / oldG : 1;
-
-        const n = a.nutrition || base.nutrition;
-        const scaled = {
-          calories: Math.round(
-            (n?.calories ?? base.nutrition.calories) * scale
-          ),
-          protein: r1n((n?.protein ?? base.nutrition.protein) * scale),
-          carbs: r1n((n?.carbs ?? base.nutrition.carbs) * scale),
-          fat: r1n((n?.fat ?? base.nutrition.fat) * scale),
-          fiber: r1n((n?.fiber ?? base.nutrition.fiber) * scale),
-          sugar: r1n((n?.sugar ?? base.nutrition.sugar) * scale),
-          sodium: Math.round((n?.sodium ?? base.nutrition.sodium) * scale),
-          cholesterol: Math.round(
-            (n?.cholesterol ?? base.nutrition.cholesterol) * scale
-          ),
-        };
-
-        const per100 =
-          newG > 0
-            ? {
-                calories: Math.round((scaled.calories * 100) / newG),
-                protein: r1n((scaled.protein * 100) / newG),
-                carbs: r1n((scaled.carbs * 100) / newG),
-                fat: r1n((scaled.fat * 100) / newG),
-                fiber: r1n((scaled.fiber * 100) / newG),
-                sugar: r1n((scaled.sugar * 100) / newG),
-                sodium: Math.round((scaled.sodium * 100) / newG),
-                cholesterol: Math.round((scaled.cholesterol * 100) / newG),
-              }
-            : (base as any).nutritionPer100g;
-
-        const item: DetectedFoodItem = {
-          ...base,
-          ...a,
-          nutrition: scaled,
-          portionSize: {
-            ...base.portionSize,
-            ...a?.portionSize,
-            estimatedGrams: newG,
-          },
-        };
-        (item as any).nutritionPer100g =
-          (a as any)?.nutritionPer100g ??
-          (base as any)?.nutritionPer100g ??
-          per100;
-
-        return item;
-      });
-
-    const totals: NutritionSummary = finalItems.reduce(
-      (acc, it) => {
-        acc.total_calories += it.nutrition.calories || 0;
-        acc.total_protein = r1(
-          acc.total_protein + (it.nutrition.protein || 0)
-        ) as number;
-        acc.total_carbs = r1(
-          acc.total_carbs + (it.nutrition.carbs || 0)
-        ) as number;
-        acc.total_fat = r1(acc.total_fat + (it.nutrition.fat || 0)) as number;
-        return acc;
-      },
-      {
-        total_calories: 0,
-        total_protein: 0,
-        total_carbs: 0,
-        total_fat: 0,
-      } as NutritionSummary
-    );
-
-    for (const x of addOns) {
-      totals.total_calories += Math.round(Number(x.calories || 0));
-      totals.total_protein = r1(
-        totals.total_protein + Number(x.protein || 0)
-      ) as number;
-      totals.total_carbs = r1(
-        totals.total_carbs + Number(x.carbs || 0)
-      ) as number;
-      totals.total_fat = r1(totals.total_fat + Number(x.fat || 0)) as number;
-    }
-
-    const adjustedBy: string | null =
-      typeof (raw as any).userId === 'string' && (raw as any).userId.trim()
-        ? (raw as any).userId.trim()
-        : ((row as any).user_id as string | null) || null;
-
-    const { data: updated, error: updErr } = await supabase
-      .from('food_analyses')
-      .update({
-        adjusted_items: finalItems,
-        adjusted_nutrition_summary: totals,
-        feedback_received: true,
-        adjusted_by: adjustedBy,
-        adjusted_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select('id, adjusted_by, adjusted_at, feedback_received')
-      .single();
-
-    if (updErr) {
-      logger.error('[ANALYSIS] Save adjusted failed', updErr);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to save adjusted analysis',
-        code: 'DATABASE_ERROR',
-      });
-    }
-
-    return res.json({
-      success: true,
-      data: {
-        analysisId: id,
-        adjustedItems: finalItems,
-        ingredientAddOns: addOns,
-        nutritionSummary: totals,
-        ignoredItemIds: unknownIds.filter(
-          (x) => !finalItems.find((fi) => Number((fi as any).itemId) === x)
-        ),
-        source: 'adjusted',
-      },
-    });
-  } catch (error) {
-    logger.error('[ANALYSIS] Adjusted endpoint error', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to save adjusted analysis',
-      code: 'INTERNAL_ERROR',
-    });
-  }
-}

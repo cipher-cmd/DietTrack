@@ -1,27 +1,27 @@
 // src/routes/analysis.ts
-// Adds per-route timeout + robust wrappers + rate-limit.
-
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import {
   analyzeFood,
   getAnalysisHistory,
   getAnalysisById,
+  // saveAdjustedAnalysis,
 } from '@/controllers/analysisController';
 import { validateAnalysisRequest } from '@/middleware/validation';
 import { analysisRateLimit } from '@/middleware/rateLimiter';
 
 const router = Router();
 
-// Small async wrapper so thrown/rejected errors hit errorHandler
-const wrap =
-  <T extends (...args: any[]) => any>(fn: T) =>
-  (req: any, res: any, next: any) =>
+// Async wrapper so thrown/rejected errors hit errorHandler
+const wrap = <T extends RequestHandler>(fn: T): RequestHandler => {
+  return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
 
-// Simple per-route timeout (returns 504 if we exceed)
+// Per-route timeout
 const ROUTE_TIMEOUT_MS = Number(process.env.ROUTE_TIMEOUT_MS || 30000);
-function withTimeout(ms: number) {
-  return (req: any, res: any, next: any) => {
+function withTimeout(ms: number): RequestHandler {
+  return (_req, res, next) => {
     const timer = setTimeout(() => {
       if (!res.headersSent) {
         res.status(504).json({
@@ -39,22 +39,15 @@ function withTimeout(ms: number) {
   };
 }
 
-/**
- * @route POST /api/v1/analysis/analyze
- * Validates and runs food analysis (image or text).
- */
 router.post(
   '/analyze',
-  analysisRateLimit, // ← rate-limit the expensive route
+  analysisRateLimit,
   withTimeout(ROUTE_TIMEOUT_MS),
   validateAnalysisRequest,
   wrap(analyzeFood)
 );
 
-/**
- * (Compatibility) Also accept POST /api/v1/analysis
- * so older clients that call `${BASE}/analysis` still work.
- */
+// Compatibility: POST /api/v1/analysis
 router.post(
   '/',
   analysisRateLimit,
@@ -63,16 +56,28 @@ router.post(
   wrap(analyzeFood)
 );
 
-/**
- * @route GET /api/v1/analysis/history
- * Returns user analysis history (paginated).
- */
-router.get('/history', wrap(getAnalysisHistory));
+// Adjusted save — lazy import to avoid TS error if the symbol isn't exported at build time
+router.post(
+  '/:id/adjusted',
+  withTimeout(ROUTE_TIMEOUT_MS),
+  (req, res, next) => {
+    (async () => {
+      const mod = await import('@/controllers/analysisController');
+      const fn = (mod as any).saveAdjustedAnalysis;
+      if (typeof fn !== 'function') {
+        return res.status(501).json({
+          success: false,
+          error: 'Adjusted endpoint not available',
+          code: 'NOT_IMPLEMENTED',
+        });
+      }
+      // Call the real controller
+      return fn(req, res);
+    })().catch(next);
+  }
+);
 
-/**
- * @route GET /api/v1/analysis/:id
- * Retrieves specific analysis by ID.
- */
+router.get('/history', wrap(getAnalysisHistory));
 router.get('/:id', wrap(getAnalysisById));
 
 export default router;

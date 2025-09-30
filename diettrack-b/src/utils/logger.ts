@@ -103,9 +103,9 @@ function scrubObject<T = any>(input: T, seen = new WeakSet()): T {
       } else if (Buffer.isBuffer(v)) {
         out[k] = `[buffer ${v.length} bytes]`;
       } else if (isPlainObject(v)) {
-        // shallow description to avoid massive logs
+        const keys = Object.keys(v);
         out[k] =
-          `{${Object.keys(v).slice(0, 10).join(', ')}${Object.keys(v).length > 10 ? ', …' : ''}}`;
+          `{${keys.slice(0, 10).join(', ')}${keys.length > 10 ? ', …' : ''}}`;
       } else {
         out[k] = '[omitted-large-field]';
       }
@@ -229,7 +229,6 @@ process.on('unhandledRejection', (reason: unknown) => {
       reason: scrubObject(reason),
     });
   }
-  // Consider exiting in prod with a supervisor to restart the app.
 });
 
 process.on('uncaughtException', (error: Error) => {

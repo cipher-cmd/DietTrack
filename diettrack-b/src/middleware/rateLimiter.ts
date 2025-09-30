@@ -4,9 +4,12 @@
 
 import rateLimit from 'express-rate-limit';
 
+// Respect reverse proxies if set (server.ts sets trust proxy = 1)
+const windowMs = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
+
 // Global API limiter (all routes)
 export const rateLimiter = rateLimit({
-  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000), // 1 min
+  windowMs,
   max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 100), // 100 req/min/IP
   standardHeaders: true,
   legacyHeaders: false,

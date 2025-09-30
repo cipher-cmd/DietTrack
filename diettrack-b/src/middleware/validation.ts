@@ -21,9 +21,13 @@ const userIdText = Joi.string().allow('', null).optional();
 
 // ----- /analysis/analyze -----
 const analyzeSchema = Joi.object({
+  // Allow prompt at the top level (prompt-only flow)
+  prompt: Joi.string().trim().min(1).max(2000).optional(),
+
+  // Optional image as base64 data URL
   image: Joi.string().pattern(IMAGE_DATAURL_RE).optional(),
 
-  // camelCase + snake_case accepted
+  // camelCase + snake_case accepted, and can contain a nested prompt too
   userContext: userContextSchema.optional(),
   user_context: userContextSchema.optional(),
 
@@ -53,13 +57,23 @@ const analyzeSchema = Joi.object({
   userId: userIdText,
 }).custom((value, helpers) => {
   const hasImage = !!value.image;
-  const prompt =
-    value?.userContext?.prompt ?? value?.user_context?.prompt ?? '';
-  if (!hasImage && !String(prompt).trim()) {
+
+  const topPrompt = typeof value.prompt === 'string' ? value.prompt : '';
+  const ctxPrompt =
+    (value?.userContext?.prompt as string | undefined) ??
+    (value?.user_context?.prompt as string | undefined) ??
+    '';
+
+  const hasPrompt =
+    (topPrompt && topPrompt.trim().length > 0) ||
+    (ctxPrompt && ctxPrompt.trim().length > 0);
+
+  if (!hasImage && !hasPrompt) {
     return helpers.error('any.custom', {
       message: 'Provide a photo or a description.',
     });
   }
+
   return value;
 }, 'image or prompt requirement');
 
@@ -70,7 +84,7 @@ export function validateAnalysisRequest(
 ) {
   const { error, value } = analyzeSchema.validate(req.body, {
     abortEarly: false,
-    stripUnknown: false,
+    stripUnknown: false, // keep your behavior: fail on unknown keys
     convert: true,
   });
 
@@ -98,7 +112,7 @@ export function validateAnalysisRequest(
 // ----- /feedback (POST) -----
 const feedbackSchema = Joi.object({
   analysisId: Joi.string()
-    .guid({ version: ['uuidv4', 'uuidv1', 'uuidv5', 'uuidv3'] })
+    .guid({ version: ['uuidv1', 'uuidv3', 'uuidv4', 'uuidv5'] })
     .required(),
   userId: userIdText,
   helpful: Joi.boolean().optional(),
