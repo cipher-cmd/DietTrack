@@ -63,9 +63,9 @@ export async function analyze({
   prompt?: string;
   userId?: string;
 }): Promise<AnalyzeResponse> {
-  const body: any = { userId, userContext: {} as any };
+  const body: any = { userId };
   if (imageBase64) body.image = imageBase64;
-  if (prompt) body.userContext.prompt = prompt;
+  if (prompt) body.prompt = prompt;
 
   const res = await fetch(`${API}/analysis`, {
     method: 'POST',

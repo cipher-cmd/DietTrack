@@ -27,7 +27,7 @@ export default function LoginScreen({ onLogin }: Props) {
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState({ email: '', password: '' });
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     // Clear previous errors
     setErrors({ email: '', password: '' });
 
@@ -48,11 +48,23 @@ export default function LoginScreen({ onLogin }: Props) {
 
     setIsLoading(true);
 
-    // Simulate network request
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      // TODO: Implement real authentication API call
+      // For now, simulate a network request
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      // Store user session (in a real app, this would be a JWT token)
+      // For demo purposes, we'll just proceed to onboarding
       onLogin();
-    }, 1500);
+    } catch (error) {
+      console.error('Login error:', error);
+      Alert.alert(
+        'Login Failed',
+        'Please check your credentials and try again.'
+      );
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleSocialLogin = (provider: string) => {

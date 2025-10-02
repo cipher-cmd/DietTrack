@@ -65,46 +65,50 @@ export default function MobileOptimizedHomeScreen({
       try {
         setLoading(true);
 
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // Simulate API delay
+        // Try real API calls first
+        try {
+          const [profile, stats, meals] = await Promise.all([
+            getUserProfile(DEMO_USER_ID),
+            getUserDailyStats(DEMO_USER_ID),
+            getUserRecentMeals(DEMO_USER_ID, 5),
+          ]);
+          setUserProfile(profile);
+          setDailyStats(stats);
+          setRecentFoods(meals);
+        } catch (apiError) {
+          console.warn('API calls failed, using mock data:', apiError);
 
-        setUserProfile({
-          id: DEMO_USER_ID,
-          name: 'Demo User',
-          email: 'demo@example.com',
-          age: 25,
-          gender: 'male',
-          height_cm: 175,
-          weight_kg: 70,
-          activity_level: 'moderate',
-          fitness_goal: 'maintain',
-          daily_calorie_target: 2000,
-          macro_targets: { protein: 140, carbs: 230, fats: 54 },
-          dietary_preferences: [],
-          allergies: [],
-          subscription_status: 'free_trial',
-        });
+          // Fallback to mock data
+          setUserProfile({
+            id: DEMO_USER_ID,
+            name: 'Demo User',
+            email: 'demo@example.com',
+            age: 25,
+            gender: 'male',
+            height_cm: 175,
+            weight_kg: 70,
+            activity_level: 'moderate',
+            fitness_goal: 'maintain',
+            daily_calorie_target: 2000,
+            macro_targets: { protein: 140, carbs: 230, fats: 54 },
+            dietary_preferences: [],
+            allergies: [],
+            subscription_status: 'free_trial',
+          });
 
-        setDailyStats({
-          calories_consumed: 0,
-          protein_consumed: 0,
-          carbs_consumed: 0,
-          fats_consumed: 0,
-          fiber_consumed: 0,
-          sugar_consumed: 0,
-          sodium_consumed: 0,
-          water_intake_ml: 0,
-        });
+          setDailyStats({
+            calories_consumed: 0,
+            protein_consumed: 0,
+            carbs_consumed: 0,
+            fats_consumed: 0,
+            fiber_consumed: 0,
+            sugar_consumed: 0,
+            sodium_consumed: 0,
+            water_intake_ml: 0,
+          });
 
-        setRecentFoods([]);
-
-        // const [profile, stats, meals] = await Promise.all([
-        //   getUserProfile(DEMO_USER_ID),
-        //   getUserDailyStats(DEMO_USER_ID),
-        //   getUserRecentMeals(DEMO_USER_ID, 5),
-        // ]);
-        // setUserProfile(profile);
-        // setDailyStats(stats);
-        // setRecentFoods(meals);
+          setRecentFoods([]);
+        }
       } catch (error) {
         console.error('Error fetching user data:', error);
         setUserProfile({

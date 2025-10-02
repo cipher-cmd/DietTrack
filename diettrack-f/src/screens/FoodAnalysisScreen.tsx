@@ -96,14 +96,15 @@ export default function FoodAnalysisScreen({
     setErrorState(null);
 
     try {
-      // Convert image URI to base64
+      // Convert image URI to base64 data URL
       const response = await fetch(imageUri);
       const blob = await response.blob();
       const base64 = await new Promise<string>((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64String = reader.result as string;
-          resolve(base64String.split(',')[1]);
+          // Keep the full data URL format for backend validation
+          resolve(base64String);
         };
         reader.readAsDataURL(blob);
       });

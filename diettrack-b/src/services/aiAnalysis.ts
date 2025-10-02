@@ -14,10 +14,7 @@ export interface AIAnalysisResult {
 }
 
 // Strategy - Gemini only for MVP
-const AI_STRATEGY = 'gemini_only' as
-  | 'gemini_only'
-  | 'vision_only'
-  | 'both';
+const AI_STRATEGY = 'gemini_only' as 'gemini_only' | 'vision_only' | 'both';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
@@ -246,20 +243,192 @@ Rules:
   }
 }
 
-/* ------------------------ Vision provider (stub) ------------------------ */
-async function analyzeWithVisionOnly(_params: {
+/* ------------------------ Vision provider ------------------------ */
+async function analyzeWithVisionOnly(params: {
   image: string;
   userContext?: Record<string, any>;
   referenceObject?: Record<string, any>;
   userId?: string;
 }): Promise<AIAnalysisResult> {
   const started = Date.now();
-  return {
-    provider: 'vision',
-    detectedItems: [],
-    confidence: 0.5,
-    processingTimeMs: Date.now() - started,
-  };
+
+  const VISION_API_KEY = process.env.GOOGLE_VISION_API_KEY;
+  if (!VISION_API_KEY) {
+    logger.warn(
+      '[Vision] GOOGLE_VISION_API_KEY missing; returning empty result'
+    );
+    return {
+      provider: 'vision',
+      detectedItems: [],
+      confidence: 0.5,
+      processingTimeMs: Date.now() - started,
+    };
+  }
+
+  try {
+    const m = params.image?.match(/^data:image\/(\w+);base64,(.+)$/);
+    if (!m) {
+      return {
+        provider: 'vision',
+        detectedItems: [],
+        confidence: 0.5,
+        processingTimeMs: Date.now() - started,
+      };
+    }
+
+    const ext = m[1].toLowerCase();
+    const data = m[2];
+    const mimeType = `image/${ext}`;
+
+    // Call Google Vision API
+    const response = await fetch(
+      `https://vision.googleapis.com/v1/images:annotate?key=${VISION_API_KEY}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              image: {
+                content: data,
+              },
+              features: [
+                {
+                  type: 'LABEL_DETECTION',
+                  maxResults: 10,
+                },
+                {
+                  type: 'OBJECT_LOCALIZATION',
+                  maxResults: 10,
+                },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Vision API error: ${response.status}`);
+    }
+
+    const result = (await response.json()) as any;
+    const annotations = result.responses?.[0] || {};
+
+    // Convert Vision API results to our format
+    const detectedItems: DetectedFoodItem[] = [];
+    let nextId = 1;
+
+    // Process labels
+    const labels = annotations.labelAnnotations || [];
+    for (const label of labels) {
+      if (label.score > 0.5) {
+        // Only include high-confidence labels
+        detectedItems.push({
+          itemId: nextId++,
+          name: label.description.toLowerCase(),
+          confidence: label.score,
+          region: { x: 0, y: 0, width: 100, height: 100 }, // Vision doesn't provide precise location
+          nutrition: {
+            calories: 0, // Vision doesn't provide nutrition data
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+            fiber: 0,
+            sugar: 0,
+            sodium: 0,
+            cholesterol: 0,
+          },
+          alternatives: [],
+          portionSize: {
+            estimatedGrams: 150, // Default portion
+            confidenceRange: {
+              min: 100,
+              max: 200,
+            },
+            servingSizeCategory: 'medium',
+          },
+          cookingMethod: 'boiled',
+          ingredients: [],
+        });
+      }
+    }
+
+    // Process objects
+    const objects = annotations.localizedObjectAnnotations || [];
+    for (const obj of objects) {
+      if (obj.score > 0.5) {
+        detectedItems.push({
+          itemId: nextId++,
+          name: obj.name.toLowerCase(),
+          confidence: obj.score,
+          region: {
+            x: Math.round(
+              obj.boundingPoly.normalizedVertices[0]?.x * 1000 || 0
+            ),
+            y: Math.round(
+              obj.boundingPoly.normalizedVertices[0]?.y * 1000 || 0
+            ),
+            width: Math.round(
+              (obj.boundingPoly.normalizedVertices[2]?.x -
+                obj.boundingPoly.normalizedVertices[0]?.x) *
+                1000 || 100
+            ),
+            height: Math.round(
+              (obj.boundingPoly.normalizedVertices[2]?.y -
+                obj.boundingPoly.normalizedVertices[0]?.y) *
+                1000 || 100
+            ),
+          },
+          nutrition: {
+            calories: 0,
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+            fiber: 0,
+            sugar: 0,
+            sodium: 0,
+            cholesterol: 0,
+          },
+          alternatives: [],
+          portionSize: {
+            estimatedGrams: 150,
+            confidenceRange: {
+              min: 100,
+              max: 200,
+            },
+            servingSizeCategory: 'medium',
+          },
+          cookingMethod: 'boiled',
+          ingredients: [],
+        });
+      }
+    }
+
+    const avgConfidence =
+      detectedItems.length > 0
+        ? detectedItems.reduce((sum, item) => sum + item.confidence, 0) /
+          detectedItems.length
+        : 0.5;
+
+    return {
+      provider: 'vision',
+      detectedItems,
+      confidence: clamp01(avgConfidence),
+      processingTimeMs: Date.now() - started,
+      rawResponse: result,
+    };
+  } catch (error) {
+    logger.error('[Vision] analysis failed', error);
+    return {
+      provider: 'vision',
+      detectedItems: [],
+      confidence: 0.5,
+      processingTimeMs: Date.now() - started,
+    };
+  }
 }
 
 /* --------------------- Multi-provider orchestration --------------------- */

@@ -49,7 +49,7 @@ export default function TextMealEntryScreen({ onBack, onSave }: Props) {
     setIsAnalyzing(true);
     try {
       // Call backend API for text analysis
-      const result = await analyze({ textInput: mealText });
+      const result = await analyze({ prompt: mealText });
 
       if (result.success && result.data?.detectedItems?.length > 0) {
         const item = result.data.detectedItems[0];
